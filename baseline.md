@@ -67,6 +67,29 @@
 
 ---
 
+## Prioritization System
+
+This project uses a different scoring model than the personal project's SRC/E score — the **Weighted Priority Index (WPI)**, an additive weighted-average model rather than a multiplicative ratio.
+
+Each corrective finding is rated on four dimensions, each on a **1–10 scale**, then combined using fixed percentage weights:
+
+| Dimension | Question it answers | Weight |
+|---|---|---|
+| **User Impact (UI)** | How directly does this hurt the end-user's ability to use the page (frustration, abandonment, inability to complete a task)? | 35% |
+| **Metric Severity (MS)** | How far from "good" is the raw measured number (e.g. how deep into the red zone)? | 25% |
+| **Traffic Reach (TR)** | What share of page views/visits does this affect? | 20% |
+| **Ease of Implementation (EI)** | How easy is the fix likely to be? (10 = trivial config change, 1 = major structural/vendor overhaul) — scored as *ease*, not effort, so higher is always better. | 20% |
+
+**Formula:**
+
+```
+WPI = (0.35 × User Impact) + (0.25 × Metric Severity) + (0.20 × Traffic Reach) + (0.20 × Ease of Implementation)
+```
+
+Result is on a 1–10 scale; higher = higher priority. Unlike the personal project's SRC/E score (which multiplies Severity × Reach × Confidence and divides by Effort — a ratio that can swing dramatically based on the divisor), WPI is an additive weighted average: every dimension contributes proportionally according to its fixed weight, so no single low score can collapse the whole result to near-zero the way dividing by a high Effort value can. This tends to keep findings with strong user-impact evidence ranked highly even when they're also hard to fix, rather than letting implementation difficulty dominate the ranking.
+
+---
+
 ## Findings
 
 Each finding below represents one distinct, independently-observable root cause. Metrics that share a root cause (e.g. FCP, LCP, and Speed Index all delayed by the same render-blocking consent/ad infrastructure) are grouped as a single finding rather than listed separately.
@@ -81,6 +104,8 @@ Each finding below represents one distinct, independently-observable root cause.
 
 **Solution (likely):** Load the CMP/consent banner asynchronously without blocking the render of the underlying page content; inline critical above-the-fold CSS; defer non-critical JS/stylesheets so the real content — not the overlay — is prioritized for early paint.
 
+**Priority Rating:** User Impact 10 · Metric Severity 10 · Traffic Reach 10 · Ease of Implementation 3 → **WPI = 0.35(10)+0.25(10)+0.20(10)+0.20(3) = 8.6**
+
 ---
 
 ### Corrective Finding 2: Heavy main-thread JS execution blocks interaction
@@ -92,6 +117,8 @@ Each finding below represents one distinct, independently-observable root cause.
 **Cause (likely):** A large volume of third-party scripts (ad tech, analytics, tracking pixels, the CMP itself) executing synchronously on the main thread. Desktop TBT being *worse* than mobile is notable — a network/device constraint wouldn't explain that, but a high volume of CPU-heavy script execution regardless of device would.
 
 **Solution (likely):** Defer/async-load third-party scripts so they don't block the main thread during initial load; audit the ad-tech and analytics stack for redundant scripts; break up long tasks so input isn't blocked for seconds at a time.
+
+**Priority Rating:** User Impact 8 · Metric Severity 9 · Traffic Reach 10 · Ease of Implementation 4 → **WPI = 0.35(8)+0.25(9)+0.20(10)+0.20(4) = 7.85**
 
 ---
 
@@ -105,6 +132,8 @@ Each finding below represents one distinct, independently-observable root cause.
 
 **Solution (likely):** Audit and consolidate the ad/tracking vendor list, lazy-load below-the-fold ads, and batch or debounce tracking/analytics calls instead of firing them individually.
 
+**Priority Rating:** User Impact 6 · Metric Severity 6 · Traffic Reach 10 · Ease of Implementation 4 → **WPI = 0.35(6)+0.25(6)+0.20(10)+0.20(4) = 6.4**
+
 ---
 
 ### Corrective Finding 4: JavaScript is over half the page's total weight (~13.2 MB of ~24.4 MB)
@@ -116,6 +145,8 @@ Each finding below represents one distinct, independently-observable root cause.
 **Cause (likely):** Unlike a single oversized first-party bundle, the request chain (`content.js` → `dom.js`/`js.js` → further scripts) suggests many separate third-party scripts stacking on top of each other, each ad/analytics vendor loading its own dependencies.
 
 **Solution (likely):** Aggressively audit and reduce the number of third-party scripts and ad vendors; lazy-load anything not required for the initial view; code-split first-party JS so only what's needed loads immediately.
+
+**Priority Rating:** User Impact 8 · Metric Severity 8 · Traffic Reach 10 · Ease of Implementation 3 → **WPI = 0.35(8)+0.25(8)+0.20(10)+0.20(3) = 7.4**
 
 ---
 
@@ -129,6 +160,8 @@ Each finding below represents one distinct, independently-observable root cause.
 
 **Solution (likely):** Reduce reliance on real-time/personalized fetches for above-the-fold content, consolidate multiple tracking calls into fewer batched requests, and ensure only genuinely time-sensitive data is fetched immediately.
 
+**Priority Rating:** User Impact 5 · Metric Severity 5 · Traffic Reach 8 · Ease of Implementation 5 → **WPI = 0.35(5)+0.25(5)+0.20(8)+0.20(5) = 5.6**
+
 ---
 
 ### Corrective Finding 6: Images are only partially cached, unlike CSS
@@ -141,6 +174,8 @@ Each finding below represents one distinct, independently-observable root cause.
 
 **Solution (likely):** Standardize image proxy URLs/query parameters so identical images share one cache key, apply long `Cache-Control` headers on the resizing service's static outputs, and lazy-load below-the-fold images to reduce total image requests.
 
+**Priority Rating:** User Impact 4 · Metric Severity 4 · Traffic Reach 7 · Ease of Implementation 6 → **WPI = 0.35(4)+0.25(4)+0.20(7)+0.20(6) = 5.0**
+
 ---
 
 ### Corrective Finding 7: Best Practices score anomaly — 35 (Desktop) vs. 77 (Mobile)
@@ -152,6 +187,8 @@ Each finding below represents one distinct, independently-observable root cause.
 **Cause (likely):** Not yet confirmed — the specific audit items behind this desktop-only drop haven't been captured in this baseline. Likely candidates include desktop-specific third-party scripts using deprecated APIs, mixed-content/insecure requests, or image aspect-ratio issues that only manifest at desktop viewport sizes.
 
 **Solution (likely):** Open the detailed Best Practices audit list on the Desktop PSI report and identify the specific failing checks — this is a case where the "likely cause" genuinely needs the diagnostic detail before a fix can be scoped.
+
+**Priority Rating:** User Impact 3 · Metric Severity 7 · Traffic Reach 6 · Ease of Implementation 7 → **WPI = 0.35(3)+0.25(7)+0.20(6)+0.20(7) = 5.4**
 
 ---
 
@@ -193,6 +230,8 @@ These findings are specifically about the *gap* between mobile and desktop, not 
 
 **Solution (likely):** Beyond the general fixes in Finding 1, consider serving a lighter-weight consent/ad experience specifically to mobile or low-bandwidth connections (e.g. via `navigator.connection`) — smaller ad creative sizes, fewer simultaneous third-party requests, and more aggressive deferral of non-critical scripts on constrained networks.
 
+**Priority Rating:** User Impact 9 · Metric Severity 9 · Traffic Reach 9 · Ease of Implementation 3 → **WPI = 0.35(9)+0.25(9)+0.20(9)+0.20(3) = 7.8**
+
 ### Finding 9: Total Blocking Time is unexpectedly *better* on mobile than desktop
 
 **Metric(s) affected:** Total Blocking Time (3,050 ms mobile vs. 5,350 ms desktop)
@@ -203,4 +242,25 @@ These findings are specifically about the *gap* between mobile and desktop, not 
 
 
 
-*Next steps: Corrective Findings 1 and 2 remain the highest-impact fixes (they touch the most metrics and represent the most severe measured degradation), with Finding 7 flagged as needing further diagnostic investigation before it can be scoped.*
+---
+
+## Final Priority Ranking
+
+Corrective findings ranked by Weighted Priority Index (highest = fix first):
+
+| Rank | Finding | User Impact | Metric Severity | Traffic Reach | Ease | WPI |
+|---|---|---|---|---|---|---|
+| 1 | Finding 1 — Render-blocking consent/ad delays paint | 10 | 10 | 10 | 3 | **8.6** |
+| 2 | Finding 2 — Main-thread JS execution blocks interaction | 8 | 9 | 10 | 4 | **7.85** |
+| 3 | Finding 8 — Throttling amplifies mobile LCP gap | 9 | 9 | 9 | 3 | **7.8** |
+| 4 | Finding 4 — JS is over half the page's weight | 8 | 8 | 10 | 3 | **7.4** |
+| 5 | Finding 3 — High request count from ad/tracking sprawl | 6 | 6 | 10 | 4 | **6.4** |
+| 6 | Finding 5 — Caching reduces bytes but not request count | 5 | 5 | 8 | 5 | **5.6** |
+| 7 | Finding 7 — Best Practices anomaly (mobile vs desktop) | 3 | 7 | 6 | 7 | **5.4** |
+| 8 | Finding 6 — Images only partially cached | 4 | 4 | 7 | 6 | **5.0** |
+
+**Takeaway:** unlike the personal project's SRC/E ranking (which surfaced a low-effort caching fix as the #1 priority), WPI's additive structure keeps the two highest-severity, highest-impact findings (render-blocking consent/ads and main-thread blocking) at the top of the list even though they're also the hardest to fix — reflecting a philosophy of "fix what hurts users most first" rather than "fix what's cheapest first." The mobile-specific throttling finding (Finding 8) lands in 3rd, just behind the two general rendering findings it's closely tied to, confirming mobile deserves dedicated attention rather than being treated as a footnote of Finding 1.
+
+---
+
+*Next steps: Corrective Findings 1, 2, and 8 form the top-priority cluster under this WPI ranking — all three trace back to the same render-blocking consent/ad infrastructure but represent genuinely distinct, addressable angles (general render blocking, main-thread execution, and mobile-specific amplification). Finding 7 remains flagged as needing further diagnostic investigation before it can be fully scored with confidence.*
