@@ -240,6 +240,88 @@ These findings are specifically about the *gap* between mobile and desktop, not 
 
 **Why this matters as a separate finding:** It's tempting to assume mobile is uniformly worse across every metric, but this shows that's not true here — treating "mobile-specific" fixes as a blanket assumption could mean under-prioritizing a desktop-specific TBT problem. Worth re-running both tests to confirm this isn't a one-off measurement, since if confirmed, it points to a desktop-specific ad/script configuration issue distinct from the general JS-weight problem in Finding 4.
 
+---
+
+## Bundle Analysis
+
+**JavaScript:** First-party code shows webpack-style hashed chunk names, indicating some route/vendor code-splitting exists for the app's own code. However, the majority of JS on the page comes from **33 separate, independently-loaded third-party vendors**, which isn't a coordinated bundling strategy so much as an uncoordinated collection of scripts from different origins. PSI estimates **2,650 KiB of unused JavaScript** total — notably, even the first-party bundle (`All.min...gz.js`, 234.7 KiB) is **70% unused (164.9 KiB)** on this page. On source maps: third-party vendors like Viafoura and OneSignal expose original source paths (`.../avatar.vue`, `.../SessionManager.ts`) in their unused-code reports, meaning they ship source maps — but the first-party AP News bundle shows no such attribution, suggesting it ships without source maps in production.
+
+**CSS:** First-party styles are a **single monolithic file** (`All.min...gz.css`, 104.3 KiB) with **no route or component splitting** evident. On this page, **90% of it (93.4 KiB) is unused** — a stark number for a site-wide, one-size-fits-all stylesheet. Total unused CSS across the page is 148 KiB, including third-party widget styles (Optanon consent banner, JW Player controls, Riverdrop quiz, Viafoura comments).
+
+**Images:** Confirmed from the networking pass that first-party images are served through a dynamic resize/proxy service (multiple sizes, modern formats) — this part is handled well. One notable exception: a third-party quiz widget (riverdrop.com) serves a **600 KiB JPEG directly**, appearing to bypass that optimization pipeline entirely.
+
+**Third-Party Resources:** 33 distinct vendors are loaded — spanning ad tech (11+ vendors), analytics, consent management, personalization/CDP, social, and notifications. Combined, these vendors account for **~4.36 seconds of cumulative main-thread time**, which almost fully explains the TBT problem measured earlier in this baseline. Top individual offenders: Google Tag Manager (645ms), Quantcast (465ms), Google APIs/IMA video ads (363ms), Viafoura commenting widget (330ms), Optanon consent (310ms). Notably, `dianomi`'s `contextfeed.js` loads **twice** — an exact duplicate request.
+
+---
+
+### Corrective Finding 10: First-party JS bundle ships significant unused code (~70% waste)
+
+**Metric(s) affected:** Unused JavaScript (164.9 KiB of 234.7 KiB transferred, first-party bundle)
+
+**How it affects users:** Even setting aside the third-party sprawl, the site's own bundle is delivering roughly 2.3x more code than this specific page actually uses — extra parse/compile time and bytes downloaded for no benefit to this page's users.
+
+**Cause (likely):** The bundle name (`All.min...`) suggests a shared, not-fully-scoped bundle serving multiple page types rather than being split per route or component.
+
+**Solution (likely):** Introduce route-based code-splitting and tree-shaking for the first-party bundle so the homepage only loads the JS it actually needs, rather than a shared "all pages" bundle.
+
+**Priority Rating:** User Impact 7 · Metric Severity 6 · Traffic Reach 10 · Ease of Implementation 6 → **WPI = 0.35(7)+0.25(6)+0.20(10)+0.20(6) = 7.15**
+
+---
+
+### Corrective Finding 11: First-party CSS is a single monolithic bundle, 90% unused on this page
+
+**Metric(s) affected:** Unused CSS (93.4 KiB of 104.3 KiB transferred, first-party stylesheet)
+
+**How it affects users:** Nearly the entire first-party stylesheet goes unused on this specific page — meaning users are downloading and having the browser parse a large stylesheet built for the whole site, not just what's needed here.
+
+**Cause (likely):** CSS is bundled as a single site-wide file (`All.min...css`) with no route or component-level splitting.
+
+**Solution (likely):** Split CSS by route/component, or introduce a critical-CSS extraction step so only the styles needed for the current page's above-the-fold content load immediately, with the rest deferred or split off entirely.
+
+**Priority Rating:** User Impact 6 · Metric Severity 7 · Traffic Reach 10 · Ease of Implementation 7 → **WPI = 0.35(6)+0.25(7)+0.20(10)+0.20(7) = 7.25**
+
+---
+
+### Corrective Finding 12: Third-party script sprawl accounts for ~4.36s of cumulative main-thread time
+
+**Metric(s) affected:** Third-party main-thread blocking time (~4,361 ms combined across 33 vendors) — directly explaining the previously-measured Total Blocking Time (3,050–5,350 ms)
+
+**How it affects users:** This is the most directly quantified cause in the entire baseline: virtually all of the measured main-thread blocking traces back to third-party scripts, not first-party code. Users experience an unresponsive page almost entirely because of ad tech, analytics, and tag-management infrastructure stacked on top of each other.
+
+**Cause (likely):** 33 separate vendors are loaded on a single page load, with heavy redundancy — at least 11 different ad-related vendors alone (GTM, GPT/Doubleclick, pub.network/Prebid, Wunderkind, dianomi, Connatix, Nativo, Amazon Ads, IAS, Quantcast, LongTail/JWPlayer ads) likely serving overlapping functions. One exact duplicate was also found: `dianomi`'s `contextfeed.js` loads twice.
+
+**Solution (likely):** Conduct a vendor audit to consolidate or remove redundant ad/analytics tools (especially overlapping ad-tech vendors), fix the confirmed duplicate script load, and defer/lazy-load lower-priority vendors (e.g. social SDKs, non-critical personalization scripts) until after the initial page is interactive.
+
+**Priority Rating:** User Impact 9 · Metric Severity 9 · Traffic Reach 10 · Ease of Implementation 4 → **WPI = 0.35(9)+0.25(9)+0.20(10)+0.20(4) = 8.2**
+
+---
+
+### Corrective Finding 13: First-party production bundles ship without source maps
+
+**Metric(s) affected:** Debuggability/maintainability (not a direct performance metric, but a notable engineering-practice gap)
+
+**How it affects users:** Not a direct user-facing performance issue, but it affects the team's ability to diagnose and fix the very problems in this report — without source maps, a minified production JS error is far harder to trace back to its original source.
+
+**Cause (likely):** Source map generation may be disabled in the production build config, or maps are generated but not hosted/uploaded anywhere accessible to the team's error-tracking tooling.
+
+**Solution (likely):** Enable source map generation in the build pipeline and upload maps privately to an error-tracking service (e.g. Sentry) rather than serving them publicly — this improves debugging without adding to the public payload size.
+
+**Priority Rating:** User Impact 3 · Metric Severity 4 · Traffic Reach 10 · Ease of Implementation 8 → **WPI = 0.35(3)+0.25(4)+0.20(10)+0.20(8) = 5.65**
+
+---
+
+### Corrective Finding 14: A third-party embedded image bypasses the site's optimization pipeline
+
+**Metric(s) affected:** Transfer Size for a single asset (600 KiB JPEG from the Riverdrop interactive quiz widget)
+
+**How it affects users:** Users who load a page containing this embedded quiz widget download a single unoptimized 600 KiB image — disproportionately large compared to the resized/modern-format images used elsewhere on the site.
+
+**Cause (likely):** The quiz widget is served by a third-party vendor (riverdrop.com) that delivers its own assets directly, bypassing AP News's own image-resizing/optimization proxy used for first-party content.
+
+**Solution (likely):** Work with the vendor to confirm responsive/optimized image delivery is enabled on their end, or proxy their assets through AP's own image-optimization pipeline where contractually possible.
+
+**Priority Rating:** User Impact 5 · Metric Severity 5 · Traffic Reach 4 · Ease of Implementation 7 → **WPI = 0.35(5)+0.25(5)+0.20(4)+0.20(7) = 5.2**
+
 
 
 ---
@@ -251,16 +333,21 @@ Corrective findings ranked by Weighted Priority Index (highest = fix first):
 | Rank | Finding | User Impact | Metric Severity | Traffic Reach | Ease | WPI |
 |---|---|---|---|---|---|---|
 | 1 | Finding 1 — Render-blocking consent/ad delays paint | 10 | 10 | 10 | 3 | **8.6** |
-| 2 | Finding 2 — Main-thread JS execution blocks interaction | 8 | 9 | 10 | 4 | **7.85** |
-| 3 | Finding 8 — Throttling amplifies mobile LCP gap | 9 | 9 | 9 | 3 | **7.8** |
-| 4 | Finding 4 — JS is over half the page's weight | 8 | 8 | 10 | 3 | **7.4** |
-| 5 | Finding 3 — High request count from ad/tracking sprawl | 6 | 6 | 10 | 4 | **6.4** |
-| 6 | Finding 5 — Caching reduces bytes but not request count | 5 | 5 | 8 | 5 | **5.6** |
-| 7 | Finding 7 — Best Practices anomaly (mobile vs desktop) | 3 | 7 | 6 | 7 | **5.4** |
-| 8 | Finding 6 — Images only partially cached | 4 | 4 | 7 | 6 | **5.0** |
+| 2 | Finding 12 — Third-party sprawl = ~4.36s main-thread time | 9 | 9 | 10 | 4 | **8.2** |
+| 3 | Finding 2 — Main-thread JS execution blocks interaction | 8 | 9 | 10 | 4 | **7.85** |
+| 4 | Finding 8 — Throttling amplifies mobile LCP gap | 9 | 9 | 9 | 3 | **7.8** |
+| 5 | Finding 4 — JS is over half the page's weight | 8 | 8 | 10 | 3 | **7.4** |
+| 6 | Finding 11 — CSS monolith, 90% unused on this page | 6 | 7 | 10 | 7 | **7.25** |
+| 7 | Finding 10 — First-party JS bundle, 70% unused | 7 | 6 | 10 | 6 | **7.15** |
+| 8 | Finding 3 — High request count from ad/tracking sprawl | 6 | 6 | 10 | 4 | **6.4** |
+| 9 | Finding 13 — First-party bundles ship without source maps | 3 | 4 | 10 | 8 | **5.65** |
+| 10 | Finding 5 — Caching reduces bytes but not request count | 5 | 5 | 8 | 5 | **5.6** |
+| 11 | Finding 7 — Best Practices anomaly (mobile vs desktop) | 3 | 7 | 6 | 7 | **5.4** |
+| 12 | Finding 14 — Third-party image bypasses optimization | 5 | 5 | 4 | 7 | **5.2** |
+| 13 | Finding 6 — Images only partially cached | 4 | 4 | 7 | 6 | **5.0** |
 
-**Takeaway:** unlike the personal project's SRC/E ranking (which surfaced a low-effort caching fix as the #1 priority), WPI's additive structure keeps the two highest-severity, highest-impact findings (render-blocking consent/ads and main-thread blocking) at the top of the list even though they're also the hardest to fix — reflecting a philosophy of "fix what hurts users most first" rather than "fix what's cheapest first." The mobile-specific throttling finding (Finding 8) lands in 3rd, just behind the two general rendering findings it's closely tied to, confirming mobile deserves dedicated attention rather than being treated as a footnote of Finding 1.
+**Takeaway:** the bundle-level analysis surfaced the single most concretely-evidenced finding in this entire baseline — Finding 12 (third-party script sprawl, ~4.36s of measured main-thread time) — which now ranks #2 overall, just behind the render-blocking consent/ad finding it's closely related to. Together, Findings 1, 12, 2, and 8 form a tightly connected top-4 cluster that all trace back to the same root problem: an enormous, uncoordinated third-party ad/tracking stack. The CSS and JS bundle-waste findings (10, 11) land solidly in the upper-middle of the ranking — real, fixable problems, but secondary to the third-party governance issue that dominates this baseline.
 
 ---
 
-*Next steps: Corrective Findings 1, 2, and 8 form the top-priority cluster under this WPI ranking — all three trace back to the same render-blocking consent/ad infrastructure but represent genuinely distinct, addressable angles (general render blocking, main-thread execution, and mobile-specific amplification). Finding 7 remains flagged as needing further diagnostic investigation before it can be fully scored with confidence.*
+*Next steps: Findings 1, 12, 2, and 8 should be treated as a single connected initiative (third-party/ad-tech governance and render-blocking behavior) rather than four separate projects, since fixing the vendor stack will likely move all four simultaneously. Finding 7 remains flagged as needing further diagnostic investigation before it can be scored with full confidence.*
