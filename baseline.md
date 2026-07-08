@@ -89,3 +89,81 @@
 **Cause (likely):** Render-blocking CSS/JS — likely including the consent banner's own stylesheet/script — loading before the browser can paint anything.
 
 **Solution (likely):** Inline critical CSS for above-the-fold content, defer non-critical JS and stylesheets, and ensure the consent banner doesn't block the render path for the rest of the page.
+
+---
+---
+
+## Networking Baseline
+
+**Tool:** Chrome DevTools → Network tab
+
+### Overall Numbers
+
+| | Cold Load (cache disabled) | Soft Refresh (cache enabled) |
+|---|---|---|
+| Requests | 214 | 217 |
+| Data Transferred | 10.6 MB | 2.6 MB |
+| Total Resource Size | 22.9 MB | 24.4 MB |
+| Load time | 11.79 s | 10.97 s |
+
+- **Compression reduction (cold load):** 22.9 MB → 10.6 MB ≈ **53.7%**
+- **Caching reduction:** 10.6 MB → 2.6 MB ≈ **75.5%** in bytes, but request count did not drop (214 → 217) — nearly every request still fires on repeat visits.
+
+### Breakdown by Resource Type (approximate, filtered views)
+
+| Type | Requests | Resource Size | Share of Total |
+|---|---|---|---|
+| JS | 87 | ~13.2 MB | ~54% |
+| Images | 59 | ~6.9 MB | ~28% |
+| CSS | 7 | ~1.1 MB | ~4% |
+| Other (fonts/XHR/ads/tracking) | ~70 | ~3.2 MB | ~13% |
+
+JS alone is over half the page's total weight. Request names reveal a heavy programmatic-advertising and tag-management stack (`executor.js`, `dom.js`, GPT ad calls, `collect?v=2` tracking pixels, GDPR/consent scripts) contributing significantly to both JS weight and total request count — not the site's own core content.
+
+---
+
+### Finding 5: Extremely high request count (214–217) driven by ad/tracking sprawl
+
+**Metric(s) affected:** Number of Requests — a major contributor to the already-poor load times given per-request latency overhead.
+
+**How it affects users:** Over 200 separate network round-trips for a single page load compounds badly on any connection with real latency, adding delay on top of the already catastrophic LCP/TBT findings from the Core Web Vitals baseline.
+
+**Cause (likely):** Request names show a heavy programmatic-advertising and tag-management stack (`executor.js`, `dom.js`, GPT ad calls, `collect?v=2` tracking pixels, GDPR/consent scripts) — a large news site typically runs dozens of ad vendors and analytics tools simultaneously, each firing its own requests independently.
+
+**Solution (likely):** Audit and consolidate the ad/tracking vendor list, lazy-load ads that are below the fold, and batch or debounce tracking/analytics calls instead of firing them individually.
+
+---
+
+### Finding 6: JavaScript is over half the page's total weight (~13.2 MB of ~24.4 MB)
+
+**Metric(s) affected:** Total Byte Weight (JS) — directly tying into the catastrophic LCP (41.6s) and TBT (up to 5,350ms) from the Core Web Vitals baseline.
+
+**How it affects users:** This much JS must be downloaded, parsed, and executed before the page is usable — explaining why users see a blank or unresponsive page for so long.
+
+**Cause (likely):** Unlike a typical single-bundle problem, the request chain here (`content.js` → `dom.js`/`js.js` → further scripts) suggests many separate third-party scripts stacking on top of each other rather than one oversized first-party bundle — each ad/analytics vendor loading its own dependencies.
+
+**Solution (likely):** Aggressively audit and reduce the number of third-party scripts and ad vendors; lazy-load anything not required for the initial view; code-split first-party JS so only what's needed up front loads immediately.
+
+---
+
+### Finding 7: Caching reduces bytes but not request count — many requests are inherently non-cacheable
+
+**Metric(s) affected:** Request count on repeat visits (214 → 217, effectively unchanged despite a 75% byte reduction).
+
+**How it affects users:** Even returning visitors still pay the full round-trip/latency cost of ~215 requests every single visit, even though the bytes themselves are mostly cached — meaning caching alone won't meaningfully speed up repeat visits without also reducing request count.
+
+**Cause (likely):** Many requests are inherently non-cacheable by nature — personalized ad creative, tracking pixels with unique per-load IDs, and "trending content" fetches that must query fresh data each time — so they can't benefit from standard browser caching regardless of headers.
+
+**Solution (likely):** Reduce reliance on real-time/personalized fetches for above-the-fold content, consolidate multiple tracking calls into fewer batched requests, and ensure only genuinely time-sensitive data is fetched immediately while everything else loads lazily.
+
+---
+
+### Finding 8: Images are only partially cached, unlike CSS (fully cached)
+
+**Metric(s) affected:** Cached Transfer Size for Images (~1.74 MB re-transferred out of ~6.9 MB total, vs. CSS which showed 0 kB re-transferred).
+
+**How it affects users:** Repeat visitors still re-download a meaningful chunk of image weight that could otherwise be served instantly from cache, adding unnecessary bytes and time to what should be a fast repeat visit.
+
+**Cause (likely):** Many images are served through a dynamic image-resizing/proxy service (URLs like `.../90/?url=https://assets.apnews.com/...`) where query parameters may vary by placement or crop, and ad creative images change per impression — both patterns defeat standard browser caching even when the underlying image is unchanged.
+
+**Solution (likely):** Standardize image proxy URLs/query parameters so identical images share one cache key, apply long `Cache-Control` headers on the resizing service's static outputs, and lazy-load below-the-fold images to cut down on total image requests in the first place.
