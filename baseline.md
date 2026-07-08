@@ -2,13 +2,13 @@
 
 **Site:** AP News — [https://apnews.com/](https://apnews.com/)
 **Primary page tested:** [https://apnews.com/](https://apnews.com/) (Homepage)
-**Conditions:** Lighthouse 13.4.0 — Mobile (emulated Moto G Power, Slow 4G throttling) and Desktop (lab data); Chrome DevTools Network tab, no throttling (networking data)
+**Conditions:** **Mobile** — Lighthouse 13.4.0, emulated **Moto G Power**, **Slow 4G network throttling** with 4x CPU slowdown (lab data), compared against Desktop (no throttling); Chrome DevTools Network tab, no throttling (networking data). All metrics below are labeled Mobile or Desktop explicitly.
 
 ---
 
 ## Metrics Summary
 
-### PageSpeed Insights — Category Scores
+### PageSpeed Insights — Category Scores (Mobile vs. Desktop)
 
 | Category | Mobile | Desktop |
 |---|---|---|
@@ -17,7 +17,7 @@
 | Best Practices | 77 🟠 | **35 🔴** |
 | SEO | 85 🟠 | 85 🟠 |
 
-### Core Web Vitals / Rendering — Lab Data
+### Core Web Vitals / Rendering — Lab Data (Mobile: Slow 4G + 4x CPU throttling vs. Desktop: untethered)
 
 | Metric | Mobile | Desktop |
 |---|---|---|
@@ -27,7 +27,7 @@
 | Cumulative Layout Shift (CLS) | 0.033 🟢 | 0.064 🟢 |
 | Speed Index | 20.4 s 🔴 | 13.2 s 🔴 |
 
-### Core Web Vitals — Field Data (real users, 28-day period)
+### Core Web Vitals — Field Data (Mobile vs. Desktop, real users, 28-day period)
 
 | Metric | Mobile — This URL | Mobile — Origin | Desktop — This URL | Desktop — Origin |
 |---|---|---|---|---|
@@ -40,7 +40,9 @@
 
 *Note the large lab-vs-field gap: lab LCP is 41.6s (mobile) while field LCP is only 2.9s. Field data is a real-user aggregate and may reflect abandoned loads, ad/content blockers, or cached states the CrUX sample handles differently than a full, unthrottled Lighthouse run. Both signals are valid — the lab run exposes a worst-case scenario the field aggregate smooths over.*
 
-### Networking
+### Networking (captured with DevTools set to "No throttling")
+
+> Note: these captures were taken without network/CPU throttling enabled, so they aren't directly comparable to the Mobile lab profile above. Re-run with Network throttling set to **Slow 4G** and CPU set to **4x slowdown** (or device emulation set to Moto G Power) in DevTools if you want networking numbers that match the PSI mobile conditions.
 
 | | Cold Load (cache disabled) | Soft Refresh (cache enabled) |
 |---|---|---|
@@ -176,5 +178,29 @@ Each finding below represents one distinct, independently-observable root cause.
 **Why this is good:** Despite a lab-measured Total Blocking Time as high as 5,350ms, real users' actual interaction responsiveness (INP) is measured as good on both platforms. This suggests that whatever's blocking the main thread during load isn't necessarily blocking users' first meaningful interactions once they do engage — a meaningfully less severe real-world picture than the lab TBT number alone would suggest, even though the overall Core Web Vitals assessment still fails due to LCP.
 
 ---
+
+## Mobile-Specific Findings
+
+These findings are specifically about the *gap* between mobile and desktop, not just mobile numbers in isolation.
+
+### Corrective Finding 8: Network + CPU throttling amplify the consent/ad-blocking delay far more on mobile than desktop
+
+**Metric(s) affected:** Largest Contentful Paint (41.6s mobile vs. 15.6s desktop — mobile is ~2.7x worse)
+
+**How it affects users:** While both platforms fail LCP badly, mobile users face a dramatically worse version of the same underlying problem (Corrective Finding 1) — the gap isn't small, it's the difference between "very slow" and "essentially non-functional."
+
+**Cause (likely):** The same consent-banner/ad-loading payload is served to both platforms, but mobile testing applies Slow 4G network throttling and 4x CPU slowdown together — meaning the identical fetch-and-execute work for the CMP and ad scripts takes dramatically longer on constrained mobile conditions, compounding rather than just adding to the desktop delay.
+
+**Solution (likely):** Beyond the general fixes in Finding 1, consider serving a lighter-weight consent/ad experience specifically to mobile or low-bandwidth connections (e.g. via `navigator.connection`) — smaller ad creative sizes, fewer simultaneous third-party requests, and more aggressive deferral of non-critical scripts on constrained networks.
+
+### Finding 9: Total Blocking Time is unexpectedly *better* on mobile than desktop
+
+**Metric(s) affected:** Total Blocking Time (3,050 ms mobile vs. 5,350 ms desktop)
+
+**How it affects users:** This is a genuinely unusual pattern — normally mobile (CPU-throttled) performs worse than desktop on execution-bound metrics. Here it's reversed, suggesting the desktop test run may have encountered a heavier or different set of third-party scripts/ads than the mobile run (ad servers often serve different creative/scripts by viewport size), or timing variance between the two test runs.
+
+**Why this matters as a separate finding:** It's tempting to assume mobile is uniformly worse across every metric, but this shows that's not true here — treating "mobile-specific" fixes as a blanket assumption could mean under-prioritizing a desktop-specific TBT problem. Worth re-running both tests to confirm this isn't a one-off measurement, since if confirmed, it points to a desktop-specific ad/script configuration issue distinct from the general JS-weight problem in Finding 4.
+
+
 
 *Next steps: Corrective Findings 1 and 2 remain the highest-impact fixes (they touch the most metrics and represent the most severe measured degradation), with Finding 7 flagged as needing further diagnostic investigation before it can be scoped.*
